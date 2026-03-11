@@ -18,6 +18,7 @@ test("Archive supports non-ASCII UTF-8 filenames", async () => {
   // Round-trip: read back and verify filenames and contents are preserved
   const readBack = new Bun.Archive(bytes);
   const result = await readBack.files();
+  expect(result.size).toBe(Object.keys(files).length);
   for (const [name, content] of Object.entries(files)) {
     const entry = result.get(name) as Blob | undefined;
     expect(entry).toBeDefined();
