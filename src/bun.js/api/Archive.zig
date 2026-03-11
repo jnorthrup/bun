@@ -187,6 +187,12 @@ fn buildTarballFromObject(globalThis: *jsc.JSGlobalObject, obj: jsc.JSValue) bun
         return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveFormatError", .{});
     }
 
+    // Use binary header charset to bypass iconv charset conversion.
+    // Filenames from JS are already valid UTF-8, so raw byte pass-through is correct.
+    if (archive.writeSetOptions("hdrcharset=BINARY") != .ok) {
+        return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveOptionsError", .{});
+    }
+
     if (lib.archive_write_open2(
         @ptrCast(archive),
         @ptrCast(&growing_buffer),
@@ -229,20 +235,20 @@ fn buildTarballFromObject(globalThis: *jsc.JSGlobalObject, obj: jsc.JSValue) bun
         // Write entry to archive
         const data = data_slice.slice();
         _ = entry.clear();
-        entry.setPathnameUtf8(key_str);
+        entry.setPathname(key_str);
         entry.setSize(@intCast(data.len));
         entry.setFiletype(@intFromEnum(lib.FileType.regular));
         entry.setPerm(0o644);
         entry.setMtime(now_secs, 0);
 
         if (archive.writeHeader(entry) != .ok) {
-            return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveHeaderError", .{});
+            return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveHeaderError: {s}", .{archive.errorString()});
         }
         if (archive.writeData(data) < 0) {
-            return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveWriteError", .{});
+            return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveWriteError: {s}", .{archive.errorString()});
         }
         if (archive.writeFinishEntry() != .ok) {
-            return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveFinishEntryError", .{});
+            return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveFinishEntryError: {s}", .{archive.errorString()});
         }
     }
 
@@ -815,7 +821,7 @@ const FilesContext = struct {
         while (archive.readNextHeader(&entry) == .ok) {
             if (entry.filetype() != @intFromEnum(lib.FileType.regular)) continue;
 
-            const pathname = entry.pathnameUtf8();
+            const pathname = entry.pathname();
             // Apply glob pattern filtering (supports both positive and negative patterns)
             if (this.glob_patterns) |patterns| {
                 if (!matchGlobPatterns(patterns, pathname)) continue;
@@ -1019,7 +1025,7 @@ fn extractToDiskFiltered(
     var entry: *lib.Archive.Entry = undefined;
 
     while (archive.readNextHeader(&entry) == .ok) {
-        const pathname = entry.pathnameUtf8();
+        const pathname = entry.pathname();
 
         // Validate path safety (reject absolute paths, path traversal)
         if (!isSafePath(pathname)) continue;
