@@ -444,7 +444,15 @@ pub const PathWatcherManager = struct {
 
                 const child_path = switch (manager._fdFromAbsolutePathZ(entry_path_z)) {
                     .result => |result| result,
-                    .err => |e| return .{ .err = e },
+                    .err => |e| {
+                        // Skip files we can't open due to permission errors.
+                        // The directory-level watch will still report changes
+                        // to these files via inotify, matching Node.js behavior.
+                        if (e.errno == @intFromEnum(bun.sys.E.ACCES) or e.errno == @intFromEnum(bun.sys.E.PERM)) {
+                            continue;
+                        }
+                        return .{ .err = e };
+                    },
                 };
 
                 {
