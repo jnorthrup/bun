@@ -187,10 +187,15 @@ fn buildTarballFromObject(globalThis: *jsc.JSGlobalObject, obj: jsc.JSValue) bun
         return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveFormatError", .{});
     }
 
-    // Use binary header charset to bypass iconv charset conversion.
+    // On POSIX, use binary header charset to bypass iconv charset conversion.
     // Filenames from JS are already valid UTF-8, so raw byte pass-through is correct.
-    if (archive.writeSetOptions("hdrcharset=BINARY") != .ok) {
-        return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveOptionsError: {s}", .{archive.errorString()});
+    // On Windows, we must NOT set hdrcharset=BINARY because the PAX writer would
+    // call archive_entry_pathname() which fails for non-ASCII wide strings, causing a segfault.
+    // Instead, on Windows we use setPathnameUtf8 and accept ARCHIVE_WARN from writeHeader.
+    if (comptime !bun.Environment.isWindows) {
+        if (archive.writeSetOptions("hdrcharset=BINARY") != .ok) {
+            return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveOptionsError: {s}", .{archive.errorString()});
+        }
     }
 
     if (lib.archive_write_open2(
@@ -244,7 +249,8 @@ fn buildTarballFromObject(globalThis: *jsc.JSGlobalObject, obj: jsc.JSValue) bun
         entry.setPerm(0o644);
         entry.setMtime(now_secs, 0);
 
-        if (archive.writeHeader(entry) != .ok) {
+        const header_result = archive.writeHeader(entry);
+        if (header_result != .ok and header_result != .warn) {
             return globalThis.throwInvalidArguments("Failed to create tarball: ArchiveHeaderError: {s}", .{archive.errorString()});
         }
         if (archive.writeData(data) < 0) {
