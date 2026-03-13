@@ -235,7 +235,10 @@ fn buildTarballFromObject(globalThis: *jsc.JSGlobalObject, obj: jsc.JSValue) bun
         // Write entry to archive
         const data = data_slice.slice();
         _ = entry.clear();
-        entry.setPathname(key_str);
+        if (comptime bun.Environment.isWindows)
+            entry.setPathnameUtf8(key_str)
+        else
+            entry.setPathname(key_str);
         entry.setSize(@intCast(data.len));
         entry.setFiletype(@intFromEnum(lib.FileType.regular));
         entry.setPerm(0o644);
