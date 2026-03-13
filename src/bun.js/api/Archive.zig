@@ -821,14 +821,15 @@ const FilesContext = struct {
         }
 
         var entry: *lib.Archive.Entry = undefined;
-        var pathname_buf: if (bun.Environment.isWindows) bun.PathBuffer else void = undefined;
+        const pathname_buf = if (bun.Environment.isWindows) bun.path_buffer_pool.get() else {};
+        defer if (bun.Environment.isWindows) bun.path_buffer_pool.put(pathname_buf);
         while (archive.readNextHeader(&entry) == .ok) {
             if (entry.filetype() != @intFromEnum(lib.FileType.regular)) continue;
 
             // On Windows, libarchive converts paths to wide strings internally, so
             // archive_entry_pathname returns null for non-ASCII filenames.
             const pathname: [:0]const u8 = if (comptime bun.Environment.isWindows)
-                bun.strings.fromWPath(&pathname_buf, entry.pathnameW() orelse continue)
+                bun.strings.fromWPath(pathname_buf, entry.pathnameW() orelse continue)
             else
                 entry.pathname();
             // Apply glob pattern filtering (supports both positive and negative patterns)
@@ -1032,13 +1033,14 @@ fn extractToDiskFiltered(
 
     var count: u32 = 0;
     var entry: *lib.Archive.Entry = undefined;
-    var pathname_buf: if (bun.Environment.isWindows) bun.PathBuffer else void = undefined;
+    const pathname_buf = if (bun.Environment.isWindows) bun.path_buffer_pool.get() else {};
+    defer if (bun.Environment.isWindows) bun.path_buffer_pool.put(pathname_buf);
 
     while (archive.readNextHeader(&entry) == .ok) {
         // On Windows, libarchive converts paths to wide strings internally, so
         // archive_entry_pathname returns null for non-ASCII filenames.
         const pathname: [:0]const u8 = if (comptime bun.Environment.isWindows)
-            bun.strings.fromWPath(&pathname_buf, entry.pathnameW() orelse continue)
+            bun.strings.fromWPath(pathname_buf, entry.pathnameW() orelse continue)
         else
             entry.pathname();
 
