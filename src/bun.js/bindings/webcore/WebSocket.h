@@ -142,6 +142,12 @@ public:
     String binaryType() const;
     ExceptionOr<void> setBinaryType(const String&);
 
+    uint16_t handshakeStatusCode() const { return m_handshakeStatusCode; }
+    const String& handshakeStatusMessage() const { return m_handshakeStatusMessage; }
+    const Vector<std::pair<String, String>>& handshakeHeaders() const { return m_handshakeHeaders; }
+    void didReceiveHandshakeResponse(uint16_t statusCode, String&& statusMessage);
+    void appendHandshakeHeader(String&& name, String&& value);
+
     ScriptExecutionContext* scriptExecutionContext() const final;
 
     using RefCounted::deref;
@@ -249,6 +255,9 @@ private:
     String m_extensions;
     void* m_upgradeClient { nullptr };
     ConnectionType m_connectionType { ConnectionType::Plain };
+    uint16_t m_handshakeStatusCode { 0 };
+    String m_handshakeStatusMessage;
+    Vector<std::pair<String, String>> m_handshakeHeaders;
     bool m_rejectUnauthorized { false };
     AnyWebSocket m_connectedWebSocket { nullptr };
     ConnectedWebSocketKind m_connectedWebSocketKind { ConnectedWebSocketKind::None };

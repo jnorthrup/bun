@@ -66,6 +66,8 @@
 #include "JSFetchHeaders.h"
 #include "headers.h"
 #include "ObjectBindings.h"
+#include <JavaScriptCore/JSFunction.h>
+#include <JavaScriptCore/ObjectConstructor.h>
 
 namespace WebCore {
 using namespace JSC;
@@ -1026,6 +1028,68 @@ WebSocket* JSWebSocket::toWrapped(JSC::VM&, JSC::JSValue value)
 JSC::JSValue getWebSocketConstructor(Zig::GlobalObject* globalObject)
 {
     return WebCore::JSWebSocket::getConstructor(globalObject->vm(), globalObject);
+}
+
+static JSC_DECLARE_HOST_FUNCTION(jsWebSocketGetHandshakeResponse);
+
+JSC_DEFINE_HOST_FUNCTION(jsWebSocketGetHandshakeResponse, (JSGlobalObject * globalObject, CallFrame* callFrame))
+{
+    auto& vm = JSC::getVM(globalObject);
+    auto scope = DECLARE_THROW_SCOPE(vm);
+
+    auto* impl = JSWebSocket::toWrapped(vm, callFrame->argument(0));
+    if (!impl) [[unlikely]]
+        return throwVMTypeError(globalObject, scope);
+
+    auto* result = JSC::constructEmptyObject(vm, globalObject->nullPrototypeObjectStructure());
+    result->putDirect(vm, Identifier::fromString(vm, "statusCode"_s), jsNumber(impl->handshakeStatusCode()), 0);
+    result->putDirect(vm, Identifier::fromString(vm, "statusMessage"_s), jsString(vm, impl->handshakeStatusMessage()), 0);
+
+    auto* headers = JSC::constructEmptyObject(vm, globalObject->nullPrototypeObjectStructure());
+    for (const auto& [name, value] : impl->handshakeHeaders()) {
+        auto lowercasedName = name.convertToASCIILowercase();
+        auto identifier = Identifier::fromString(vm, lowercasedName);
+        auto jsValue = jsString(vm, value);
+
+        auto existing = headers->get(globalObject, identifier);
+        RETURN_IF_EXCEPTION(scope, {});
+
+        if (WTF::equalIgnoringASCIICase(lowercasedName, "set-cookie"_s)) {
+            JSC::JSArray* setCookieValues = jsDynamicCast<JSC::JSArray*>(existing);
+            if (!setCookieValues) {
+                setCookieValues = JSC::constructEmptyArray(globalObject, nullptr);
+                RETURN_IF_EXCEPTION(scope, {});
+                headers->putDirect(vm, identifier, setCookieValues, 0);
+            }
+            setCookieValues->push(globalObject, jsValue);
+            RETURN_IF_EXCEPTION(scope, {});
+            continue;
+        }
+
+        if (!existing.isUndefined()) {
+            auto existingValue = existing.toWTFString(globalObject);
+            RETURN_IF_EXCEPTION(scope, {});
+            jsValue = jsString(vm, makeString(existingValue, ", "_s, value));
+        }
+
+        headers->putDirect(vm, identifier, jsValue, 0);
+    }
+
+    result->putDirect(vm, Identifier::fromString(vm, "headers"_s), headers, 0);
+
+    RELEASE_AND_RETURN(scope, JSValue::encode(result));
+}
+
+JSC::JSValue createWebSocketInternalBinding(Zig::GlobalObject* globalObject)
+{
+    auto& vm = globalObject->vm();
+    auto* obj = constructEmptyObject(globalObject);
+    obj->putDirect(
+        vm,
+        JSC::PropertyName(JSC::Identifier::fromString(vm, "getHandshakeResponse"_s)),
+        JSC::JSFunction::create(vm, globalObject, 1, "getHandshakeResponse"_s, jsWebSocketGetHandshakeResponse, ImplementationVisibility::Public),
+        0);
+    return obj;
 }
 
 }

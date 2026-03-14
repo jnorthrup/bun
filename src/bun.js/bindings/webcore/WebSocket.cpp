@@ -292,6 +292,18 @@ void WebSocket::setExtensionsFromDeflateParams(const PerMessageDeflateParams* de
     m_extensions = extensions.toString();
 }
 
+void WebSocket::didReceiveHandshakeResponse(uint16_t statusCode, String&& statusMessage)
+{
+    m_handshakeStatusCode = statusCode;
+    m_handshakeStatusMessage = WTF::move(statusMessage);
+    m_handshakeHeaders.clear();
+}
+
+void WebSocket::appendHandshakeHeader(String&& name, String&& value)
+{
+    m_handshakeHeaders.append({ WTF::move(name), WTF::move(value) });
+}
+
 ExceptionOr<Ref<WebSocket>> WebSocket::create(ScriptExecutionContext& context, const String& url)
 {
     return create(context, url, Vector<String> {}, std::nullopt);
@@ -427,6 +439,12 @@ size_t WebSocket::memoryCost() const
     cost += m_url.string().sizeInBytes();
     cost += m_subprotocol.sizeInBytes();
     cost += m_extensions.sizeInBytes();
+    cost += m_handshakeStatusMessage.sizeInBytes();
+    cost += m_handshakeHeaders.capacity() * sizeof(std::pair<String, String>);
+    for (const auto& [name, value] : m_handshakeHeaders) {
+        cost += name.sizeInBytes();
+        cost += value.sizeInBytes();
+    }
 
     if (m_connectedWebSocketKind == ConnectedWebSocketKind::Client) {
         cost += Bun__WebSocketClient__memoryCost(m_connectedWebSocket.client);
@@ -1839,4 +1857,16 @@ void WebCore::WebSocket::setProtocol(const String& protocol)
 extern "C" void WebSocket__setProtocol(WebCore::WebSocket* webSocket, BunString* protocol)
 {
     webSocket->setProtocol(protocol->transferToWTFString());
+}
+
+extern "C" void WebSocket__didReceiveHandshakeResponse(WebCore::WebSocket* webSocket, uint16_t statusCode, const char* statusMessagePtr, size_t statusMessageLen)
+{
+    webSocket->didReceiveHandshakeResponse(statusCode, WTF::String(std::span { reinterpret_cast<const Latin1Character*>(statusMessagePtr), statusMessageLen }));
+}
+
+extern "C" void WebSocket__appendHandshakeHeader(WebCore::WebSocket* webSocket, const char* namePtr, size_t nameLen, const char* valuePtr, size_t valueLen)
+{
+    webSocket->appendHandshakeHeader(
+        WTF::String(std::span { reinterpret_cast<const Latin1Character*>(namePtr), nameLen }),
+        WTF::String(std::span { reinterpret_cast<const Latin1Character*>(valuePtr), valueLen }));
 }

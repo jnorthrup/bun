@@ -109,6 +109,7 @@ function normalizeData(data, opts) {
 
 // https://github.com/oven-sh/bun/issues/11866
 let WebSocket;
+let getHandshakeResponse;
 
 /**
  * @link https://github.com/websockets/ws/blob/master/doc/ws.md#class-websocket
@@ -257,33 +258,58 @@ class BunWebSocket extends EventEmitter {
     let ws = (this.#ws = new WebSocket(url, wsOptions));
     ws.binaryType = "nodebuffer";
 
+    ws.addEventListener("open", () => {
+      if (this.listenerCount("upgrade") > 0) {
+        getHandshakeResponse ??= $cpp("JSWebSocket.cpp", "createWebSocketInternalBinding").getHandshakeResponse;
+        this.emit("upgrade", getHandshakeResponse(ws));
+      }
+      this.emit("open");
+    });
+
+    ws.addEventListener("error", err => {
+      if (this.listenerCount("unexpected-response") > 0) {
+        getHandshakeResponse ??= $cpp("JSWebSocket.cpp", "createWebSocketInternalBinding").getHandshakeResponse;
+        const response = getHandshakeResponse(ws);
+        if (response.statusCode !== 0 && response.statusCode !== 101) {
+          const parsed = new URL(ws.url);
+          const request = {
+            method: method || "GET",
+            path: parsed.pathname + parsed.search,
+            host: parsed.host,
+            headers: headers || {},
+            getHeader(name) {
+              const needle = String(name).toLowerCase();
+              for (const key in this.headers) {
+                if (key.toLowerCase() === needle) return this.headers[key];
+              }
+            },
+          };
+          this.emit("unexpected-response", request, response);
+          return;
+        }
+      }
+      if (this.listenerCount("error") > 0) {
+        this.emit("error", err);
+      }
+    });
+
     return ws;
   }
 
   #onOrOnce(event, listener, once) {
-    if (event === "unexpected-response" || event === "upgrade" || event === "redirect") {
+    if (event === "redirect") {
       emitWarning(event, "ws.WebSocket '" + event + "' event is not implemented in bun");
     }
     const mask = 1 << eventIds[event];
     const hasPersistentListener = mask && (this.#eventId & mask) === mask;
-    // Add a native listener if:
-    // 1. For `on()`: no native listener exists yet (will be persistent)
-    // 2. For `once()`: no persistent `on()` listener exists (otherwise the persistent one forwards events)
-    //    If only `once()` listeners exist, each needs its own native listener since they auto-remove
-    if (mask && !hasPersistentListener) {
-      // Only set the eventId bit for persistent `on` listeners, not for `once`
+    // Native "open" and "error" listeners are always installed in #createWebSocket so that
+    // "upgrade" and "unexpected-response" can be emitted from the same native event without
+    // double-dispatching. For all other events, lazily install a native listener.
+    if (mask && !hasPersistentListener && event !== "open" && event !== "error") {
       if (!once) {
         this.#eventId |= mask;
       }
-      if (event === "open") {
-        this.#ws.addEventListener(
-          "open",
-          () => {
-            this.emit("open");
-          },
-          once,
-        );
-      } else if (event === "close") {
+      if (event === "close") {
         this.#ws.addEventListener(
           "close",
           ({ code, reason, wasClean }) => {
@@ -305,14 +331,6 @@ class BunWebSocket extends EventEmitter {
               }
               this.emit("message", this.#fragments ? [encoded] : encoded, isBinary);
             }
-          },
-          once,
-        );
-      } else if (event === "error") {
-        this.#ws.addEventListener(
-          "error",
-          err => {
-            this.emit("error", err);
           },
           once,
         );

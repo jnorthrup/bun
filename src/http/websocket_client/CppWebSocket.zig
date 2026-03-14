@@ -73,6 +73,8 @@ pub const CppWebSocket = opaque {
     extern fn WebSocket__incrementPendingActivity(websocket_context: *CppWebSocket) void;
     extern fn WebSocket__decrementPendingActivity(websocket_context: *CppWebSocket) void;
     extern fn WebSocket__setProtocol(websocket_context: *CppWebSocket, protocol: *bun.String) void;
+    extern fn WebSocket__didReceiveHandshakeResponse(websocket_context: *CppWebSocket, status_code: u16, status_message_ptr: [*]const u8, status_message_len: usize) void;
+    extern fn WebSocket__appendHandshakeHeader(websocket_context: *CppWebSocket, name_ptr: [*]const u8, name_len: usize, value_ptr: [*]const u8, value_len: usize) void;
     pub fn ref(this: *CppWebSocket) void {
         jsc.markBinding(@src());
         WebSocket__incrementPendingActivity(this);
@@ -85,6 +87,14 @@ pub const CppWebSocket = opaque {
     pub fn setProtocol(this: *CppWebSocket, protocol: *bun.String) void {
         jsc.markBinding(@src());
         WebSocket__setProtocol(this, protocol);
+    }
+    pub fn didReceiveHandshakeResponse(this: *CppWebSocket, status_code: u16, status_message: []const u8) void {
+        jsc.markBinding(@src());
+        WebSocket__didReceiveHandshakeResponse(this, status_code, status_message.ptr, status_message.len);
+    }
+    pub fn appendHandshakeHeader(this: *CppWebSocket, name: []const u8, value: []const u8) void {
+        jsc.markBinding(@src());
+        WebSocket__appendHandshakeHeader(this, name.ptr, name.len, value.ptr, value.len);
     }
 };
 
