@@ -759,7 +759,7 @@ pub fn NewHTTPUpgradeClient(comptime ssl: bool) type {
             var deflate_result = DeflateNegotiationResult{};
 
             if (this.outgoing_websocket) |ws| {
-                ws.didReceiveHandshakeResponse(@intCast(response.status_code), response.status);
+                ws.didReceiveHandshakeResponse(std.math.cast(u16, response.status_code) orelse 0, response.status);
                 for (response.headers.list) |header| {
                     ws.appendHandshakeHeader(header.name, header.value);
                 }
