@@ -107,6 +107,34 @@ fn SinglyLinkedList(comptime T: type, comptime Parent: type) type {
 
 const log_allocations = false;
 
+/// DEPRECATION WARNING: ObjectPool is deprecated due to race conditions
+/// 
+/// This implementation has known race conditions in multi-threaded use:
+/// 1. Thread-unsafe global state (lines 133-145): non-atomic access to threadlocal/global data
+/// 2. Non-atomic pool operations: push()/get() without synchronization
+/// 3. Memory leak: objects not properly returned in error paths
+/// 
+/// MIGRATION PATH:
+/// 
+/// Old code:
+///   const Pool = ObjectPool(MyType, init, true, 32);
+///   const node = Pool.get(allocator);
+///   Pool.release(node);
+/// 
+/// New code:
+///   const rust_pool = @import("bun.js/bindings/rust_pool.zig");
+///   const Pool = rust_pool.ObjectPool(MyType, init, true, 32);
+///   const node = Pool.get(allocator);
+///   Pool.release(node);
+/// 
+/// The new RustPool-based ObjectPool provides:
+/// - Thread-safe lock-free operations
+/// - No memory leaks
+/// - Drop-in replacement with same API
+/// - Better performance under concurrent access
+/// 
+/// See: src/bun.js/bindings/rust_pool.zig for implementation
+
 pub fn ObjectPool(
     comptime Type: type,
     comptime Init: (?fn (allocator: std.mem.Allocator) anyerror!Type),

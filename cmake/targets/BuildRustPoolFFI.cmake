@@ -1,0 +1,60 @@
+set(RUST_POOL_FFI_CWD ${CMAKE_SOURCE_DIR}/src/rust_pool_ffi)
+set(RUST_POOL_FFI_BUILD_PATH ${BUILD_PATH}/rust_pool_ffi)
+
+if(DEBUG)
+  set(RUST_POOL_FFI_BUILD_TYPE debug)
+else()
+  set(RUST_POOL_FFI_BUILD_TYPE release)
+endif()
+
+if(CMAKE_HOST_APPLE)
+  set(RUST_POOL_FFI_LIB_NAME ${CMAKE_STATIC_LIBRARY_PREFIX}bun_pool_ffi${CMAKE_STATIC_LIBRARY_SUFFIX})
+elseif(CMAKE_HOST_WIN32)
+  set(RUST_POOL_FFI_LIB_NAME ${CMAKE_STATIC_LIBRARY_PREFIX}bun_pool_ffi${CMAKE_STATIC_LIBRARY_SUFFIX})
+else()
+  set(RUST_POOL_FFI_LIB_NAME ${CMAKE_STATIC_LIBRARY_PREFIX}bun_pool_ffi${CMAKE_STATIC_LIBRARY_SUFFIX})
+endif()
+
+set(RUST_POOL_FFI_LIBRARY ${RUST_POOL_FFI_BUILD_PATH}/${RUST_POOL_FFI_BUILD_TYPE}/${RUST_POOL_FFI_LIB_NAME})
+
+set(RUST_POOL_FFI_BUILD_ARGS
+  --target-dir ${BUILD_PATH}/rust_pool_ffi
+)
+
+if(RELEASE)
+  list(APPEND RUST_POOL_FFI_BUILD_ARGS --release)
+endif()
+
+# Rust optimization flags
+if (NOT WIN32)
+  set(RUSTPOOL_RUSTFLAGS "-Cpanic=abort -Cdebuginfo=0 -Copt-level=s")
+endif()
+
+set(RUST_POOL_FFI_ENV
+  CARGO_TERM_COLOR=always
+  CARGO_TERM_VERBOSE=true
+  CARGO_TERM_DIAGNOSTIC=true
+  CARGO_ENCODED_RUSTFLAGS=${RUSTPOOL_RUSTFLAGS}
+  CARGO_HOME=${CARGO_HOME}
+  RUSTUP_HOME=${RUSTUP_HOME}
+)
+
+register_command(
+  TARGET
+    rust_pool_ffi
+  CWD
+    ${RUST_POOL_FFI_CWD}
+  COMMAND
+    ${CARGO_EXECUTABLE}
+      build
+      ${RUST_POOL_FFI_BUILD_ARGS}
+  ARTIFACTS
+    ${RUST_POOL_FFI_LIBRARY}
+  ENVIRONMENT
+    ${RUST_POOL_FFI_ENV}
+)
+
+target_link_libraries(${bun} PRIVATE ${RUST_POOL_FFI_LIBRARY})
+if(BUN_LINK_ONLY)
+  target_sources(${bun} PRIVATE ${RUST_POOL_FFI_LIBRARY})
+endif()

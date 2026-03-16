@@ -1065,8 +1065,9 @@ pub const Formatter = struct {
     // For detecting circular references
     pub const Visited = struct {
         const ObjectPool = @import("../pool.zig").ObjectPool;
+        const rust_pool = @import("./bindings/rust_pool.zig");
         pub const Map = std.AutoHashMap(JSValue, void);
-        pub const Pool = ObjectPool(
+        pub const Pool = rust_pool.ObjectPool(
             Map,
             struct {
                 pub fn init(allocator: std.mem.Allocator) anyerror!Map {

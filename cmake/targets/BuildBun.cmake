@@ -55,6 +55,7 @@ set(BUN_DEPENDENCIES
   Highway
   LibDeflate
   LolHtml
+  RustPoolFFI
   Lshpack
   Mimalloc
   Zlib
@@ -1324,6 +1325,7 @@ endforeach()
 
 list(TRANSFORM BUN_DEPENDENCIES TOLOWER OUTPUT_VARIABLE BUN_TARGETS)
 add_custom_target(dependencies DEPENDS ${BUN_TARGETS})
+add_dependencies(${bun} dependencies)
 
 if(APPLE)
   target_link_libraries(${bun} PRIVATE icucore resolv)

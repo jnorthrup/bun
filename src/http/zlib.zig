@@ -2,7 +2,7 @@ fn initMutableString(allocator: std.mem.Allocator) anyerror!MutableString {
     return MutableString.initEmpty(allocator);
 }
 
-const BufferPool = bun.ObjectPool(MutableString, initMutableString, false, 4);
+const BufferPool = rust_pool.ObjectPool(MutableString, initMutableString, false, 4);
 pub fn get(allocator: std.mem.Allocator) *MutableString {
     return &BufferPool.get(allocator).data;
 }
@@ -32,3 +32,4 @@ const std = @import("std");
 
 const bun = @import("bun");
 const MutableString = bun.MutableString;
+const rust_pool = @import("bun.js/bindings/rust_pool.zig");

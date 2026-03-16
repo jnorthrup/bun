@@ -574,7 +574,7 @@ pub const StringVoidMap = struct {
         Pool.release(node);
     }
 
-    pub const Pool = ObjectPool(StringVoidMap, init, true, 32);
+    pub const Pool = rust_pool.ObjectPool(StringVoidMap, init, true, 32);
     pub const Node = Pool.Node;
 };
 
@@ -1224,6 +1224,7 @@ pub const RuntimeImports = _runtime.Runtime.Imports;
 pub const RuntimeNames = _runtime.Runtime.Names;
 
 pub const NewParser_ = @import("./ast/P.zig").NewParser_;
+const rust_pool = @import("bun.js/bindings/rust_pool.zig");
 
 pub const StringHashMap = bun.StringHashMap;
 pub const js_printer = bun.js_printer;

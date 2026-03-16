@@ -10,7 +10,7 @@ comptime {
 pub const DOMExceptionCode = @import("./bindings/JSErrorCode.zig").DOMExceptionCode;
 
 // TODO: make this JSGlobalObject local for better security
-pub const ByteListPool = bun.ObjectPool(bun.ByteList, null, true, 8);
+pub const ByteListPool = rust_pool.ObjectPool(bun.ByteList, null, true, 8);
 
 pub const Crypto = @import("./webcore/Crypto.zig");
 pub const AbortSignal = @import("./bindings/AbortSignal.zig").AbortSignal;
@@ -126,3 +126,4 @@ const WebSocketHTTPSClient = @import("../http/websocket_http_client.zig").WebSoc
 
 const bun = @import("bun");
 const jsc = bun.jsc;
+const rust_pool = @import("./bindings/rust_pool.zig");
