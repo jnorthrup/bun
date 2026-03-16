@@ -9,7 +9,7 @@ pub fn get(allocator: std.mem.Allocator) *MutableString {
 
 pub fn put(mutable: *MutableString) void {
     mutable.reset();
-    var node: BufferPool.Node = @fieldParentPtr("data", mutable);
+    var node: *BufferPool.Node = @fieldParentPtr("data", mutable);
     node.release();
 }
 
@@ -32,4 +32,4 @@ const std = @import("std");
 
 const bun = @import("bun");
 const MutableString = bun.MutableString;
-const rust_pool = @import("bun.js/bindings/rust_pool.zig");
+const rust_pool = @import("../bun.js/bindings/rust_pool.zig");

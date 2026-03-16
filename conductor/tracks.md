@@ -230,7 +230,22 @@ const Pool = rust_pool.ObjectPool(MyType, init, true, 32);
 
 ---
 
-## Subtrack: Phase 6 - Build Verification and Testing 🔄 IN PROGRESS
+## Subtrack: Phase 6 - Wire rust_pool_ffi to use literbike AtomicPool ✅ COMPLETE
+
+### Bounded Slice
+
+Remove duplicate AtomicPool impl from `src/rust_pool_ffi/src/lib.rs`.
+Add literbike path dependency to `src/rust_pool_ffi/Cargo.toml`.
+Use `literbike::json::pool::AtomicPool<*mut c_void>` in the FFI shim.
+
+### Files
+
+- `src/rust_pool_ffi/Cargo.toml` - add literbike path dep
+- `src/rust_pool_ffi/src/lib.rs` - use literbike AtomicPool, remove duplicate
+
+---
+
+## Subtrack: Phase 7 - Zig Compile Verification 🔄 IN PROGRESS
 
 ### Objective
 
