@@ -1266,7 +1266,7 @@ const Allocator = std.mem.Allocator;
 const _runtime = @import("./runtime.zig");
 const Define = @import("./defines.zig").Define;
 const NewParser = @import("./ast/P.zig").NewParser;
-const ObjectPool = @import("./pool.zig").ObjectPool;
+const ObjectPool = @import("./bun.js/bindings/rust_pool.zig").ObjectPool;
 
 const Index = @import("./ast/base.zig").Index;
 const RefCtx = @import("./ast/base.zig").RefCtx;

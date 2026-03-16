@@ -540,7 +540,7 @@ pub fn csprng(bytes: []u8) void {
     _ = BoringSSL.c.RAND_bytes(bytes.ptr, bytes.len);
 }
 
-pub const ObjectPool = @import("./pool.zig").ObjectPool;
+pub const ObjectPool = @import("./bun.js/bindings/rust_pool.zig").ObjectPool;
 
 pub fn assertNonBlocking(fd: anytype) void {
     assert((std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch unreachable) & O.NONBLOCK != 0);

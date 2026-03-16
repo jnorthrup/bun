@@ -196,7 +196,7 @@ pub fn responseError(
 pub const Registry = struct {
     pub const default_url = "https://registry.npmjs.org/";
     pub const default_url_hash = bun.Wyhash11.hash(0, strings.withoutTrailingSlash(default_url));
-    pub const BodyPool = rust_pool.ObjectPool(MutableString, MutableString.init2048, true, 8);
+    pub const BodyPool = @import("../bun.js/bindings/rust_pool.zig").ObjectPool(MutableString, MutableString.init2048, true, 8);
 
     pub const Scope = struct {
         name: string = "",
@@ -2755,8 +2755,7 @@ const std = @import("std");
 const Bin = @import("./bin.zig").Bin;
 const IdentityContext = @import("../identity_context.zig").IdentityContext;
 const Integrity = @import("./integrity.zig").Integrity;
-const ObjectPool = @import("../pool.zig").ObjectPool;
-const rust_pool = @import("../bun.js/bindings/rust_pool.zig");
+const ObjectPool = @import("../bun.js/bindings/rust_pool.zig").ObjectPool;
 const URL = @import("../url.zig").URL;
 
 const Aligner = @import("./install.zig").Aligner;
