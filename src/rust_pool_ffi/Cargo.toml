@@ -8,7 +8,7 @@ name = "bun_pool_ffi"
 crate-type = ["staticlib"]
 
 [dependencies]
-crossbeam-queue = "0.3"
+literbike = { path = "../../../literbike", default-features = false, features = ["json", "quic"] }
 
 [profile.release]
 opt-level = 3
