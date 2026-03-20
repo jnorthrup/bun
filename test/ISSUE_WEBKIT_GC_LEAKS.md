@@ -76,11 +76,26 @@ The leaks occur during JSC's parallel GC marking phase:
 
 ### Related Issues
 
-- **WPEWebKit #1622** - "JSC Slotvisitor::drain crash" (same root cause, crash variant)
+- **WPEWebKit #1622** - "JSC SlotVisitor::drain crash" (same root cause, crash variant)
   https://github.com/WebPlatformForEmbedded/WPEWebKit/issues/1622
+
+- **WebKit Bug #200863** - "Crash in JSC::SlotVisitor::visitChildren"
+  https://bugs.webkit.org/show_bug.cgi?id=200863
 
 - **LLVM #115992** - "LeakSanitizer false positive on macOS AArch64" (system lib init, separate issue)
   https://github.com/llvm/llvm-project/issues/115992
+
+- **Claude Code #33453** - "Memory leak: Bun/WebKit Malloc unbounded growth reaching..."
+  https://github.com/anthropics/claude-code/issues/33453
+
+- **React Native #10734** - "drain and JSC::SlotVisitor::setMarkedAndAppendToMarkStack crash"
+  https://github.com/facebook/react-native/issues/10734
+
+- **Rust #121624** - "AddressSanitizer reports leak for empty main function on macOS"
+  https://github.com/rust-lang/rust/issues/121624
+
+- **Rust #98473** - "Leak sanitizer does not work on aarch64 macOS"
+  https://github.com/rust-lang/rust/issues/98473
 
 ## Reproduction
 

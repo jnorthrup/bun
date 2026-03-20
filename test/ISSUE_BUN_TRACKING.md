@@ -96,8 +96,10 @@ Key excerpt:
 | Project | Issue | Status |
 |---------|-------|--------|
 | WebKit | JSC GC race condition | 🔄 To be filed |
-| WPEWebKit | #1622 SlotVisitor::drain crash | Open |
-| LLVM | #115992 LSAN false positives on AArch64 | Open |
+| WPEWebKit | [#1622](https://github.com/WebPlatformForEmbedded/WPEWebKit/issues/1622) SlotVisitor::drain crash | Open |
+| WebKit | [#200863](https://bugs.webkit.org/show_bug.cgi?id=200863) Crash in JSC::SlotVisitor::visitChildren | Open |
+| LLVM | [#115992](https://github.com/llvm/llvm-project/issues/115992) LSAN false positives on AArch64 | Open |
+| Claude Code | [#33453](https://github.com/anthropics/claude-code/issues/33453) WebKit Malloc unbounded growth | Open |
 | Bun | This issue | 🔄 Tracking |
 
 ## Tools

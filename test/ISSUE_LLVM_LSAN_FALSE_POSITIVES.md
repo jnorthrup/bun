@@ -59,6 +59,12 @@ All occur **before `main()`** and are intentionally never freed (process-lifetim
 - **rust-lang/rust #121624** - "AddressSanitizer reports leak for empty main on macOS"
   https://github.com/rust-lang/rust/issues/121624
 
+- **rust-lang/rust #98473** - "Leak sanitizer does not work on aarch64 macOS"
+  https://github.com/rust-lang/rust/issues/98473
+
+- **MacPorts #68079** - "LeakSanitizer no longer usable"
+  https://trac.macports.org/ticket/68079
+
 - **google/sanitizers #1501** - "LeakSanitizer: unknown bytes leaked"
   https://github.com/google/sanitizers/issues/1501
 
