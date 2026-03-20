@@ -610,6 +610,7 @@ pub fn exitAndDeinit(this: *WebWorker) noreturn {
     }
     var arena = this.arena;
 
+    // Dispatch exit event to JS (this may trigger GC)
     WebWorker__dispatchExit(globalObject, cpp_worker, exit_code);
     if (loop) |loop_| {
         loop_.internal_loop_data.jsc_vm = null;
@@ -625,6 +626,8 @@ pub fn exitAndDeinit(this: *WebWorker) noreturn {
         bun.windows.libuv.Loop.shutdown();
     }
 
+    // Clear cpp_worker BEFORE deinit to prevent use-after-free
+    // The C++ Worker destructor will run and may poison memory
     this.deinit();
 
     if (vm_to_deinit) |vm| {
