@@ -9,6 +9,7 @@ const ErrorEntry = struct {
     access_type: []const u8,
     stack_frames: std.ArrayList(usize),
     symbolicated: ?SymbolInfo = null,
+    classification: Classification = .unknown,
 
     const SymbolInfo = struct {
         file: []const u8,
@@ -17,7 +18,101 @@ const ErrorEntry = struct {
         function: []const u8,
         offset: u64,
     };
+
+    const Classification = enum {
+        /// System library initialization (false positive on macOS AArch64)
+        system_init,
+        /// JavaScriptCore GC/heap related
+        jsc_gc,
+        /// JavaScriptCore AST/parser related
+        jsc_ast,
+        /// WTF (Web Template Framework) related
+        wtf,
+        /// Bun runtime code
+        bun,
+        /// Native module / third-party library
+        native,
+        /// Unknown / unclassified
+        unknown,
+    };
 };
+
+/// System modules that commonly show up in LSAN reports but aren't actionable
+/// These are mostly macOS AArch64 false positives from system initialization
+const system_modules = [_][]const u8{
+    "libsystem_malloc.dylib",
+    "libsystem_pthread.dylib",
+    "libsystem_platform.dylib",
+    "libdyld.dylib",
+    "libdispatch.dylib",
+    "libobjc.A.dylib",
+    "libclang_rt.asan_osx_dynamic.dylib",
+    "dyld",
+    "libSystem.B.dylib",
+    "libxpc.dylib",
+};
+
+/// Check if a module is a known system library
+fn isSystemModule(module_name: []const u8) bool {
+    for (&system_modules) |sys_mod| {
+        if (std.mem.endsWith(u8, module_name, sys_mod)) return true;
+        if (std.mem.eql(u8, module_name, sys_mod)) return true;
+    }
+    return false;
+}
+
+/// Classify a leak based on the symbolicated function name
+fn classifyLeak(function: []const u8, module: []const u8) ErrorEntry.Classification {
+    // First check if it's a system module (false positive)
+    if (isSystemModule(module)) return .system_init;
+
+    // Check for JSC GC-related functions
+    if (std.mem.indexOf(u8, function, "JSC::SlotVisitor") != null or
+        std.mem.indexOf(u8, function, "JSC::Heap::") != null or
+        std.mem.indexOf(u8, function, "JSC::MarkedBlock") != null or
+        std.mem.indexOf(u8, function, "JSC::Collector") != null or
+        std.mem.indexOf(u8, function, "drainFromShared") != null or
+        std.mem.indexOf(u8, function, "visitChildren") != null)
+    {
+        return .jsc_gc;
+    }
+
+    // Check for JSC AST/parser functions
+    if (std.mem.indexOf(u8, function, "JSC::ASTBuilder") != null or
+        std.mem.indexOf(u8, function, "JSC::Parser") != null or
+        std.mem.indexOf(u8, function, "JSC::Lexer") != null or
+        std.mem.indexOf(u8, function, "JSC::createForOf") != null)
+    {
+        return .jsc_ast;
+    }
+
+    // Check for JSC other
+    if (std.mem.indexOf(u8, function, "JSC::") != null or
+        std.mem.indexOf(u8, function, "JSC::") != null)
+    {
+        return .jsc_gc;
+    }
+
+    // Check for WTF functions
+    if (std.mem.indexOf(u8, function, "WTF::") != null or
+        std.mem.indexOf(u8, function, "WTF::HashTable") != null or
+        std.mem.indexOf(u8, function, "WTF::fastMalloc") != null or
+        std.mem.indexOf(u8, function, "WTF::AutomaticThread") != null)
+    {
+        return .wtf;
+    }
+
+    // Check for Bun-specific functions
+    if (std.mem.indexOf(u8, function, "bun::") != null or
+        std.mem.indexOf(u8, function, "Bun::") != null or
+        std.mem.indexOf(u8, function, "Zig::") != null or
+        std.mem.indexOf(u8, function, "WebCore::") != null)
+    {
+        return .bun;
+    }
+
+    return .unknown;
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -92,12 +187,22 @@ pub fn main() !void {
     // Print detailed report
     for (errors.items, 0..) |e, i| {
         const icon = if (std.mem.startsWith(u8, e.error_type, "detected")) "💧" else "💥";
-        
+        const class_icon = switch (e.classification) {
+            .system_init => "⚙️",  // System init (likely false positive)
+            .jsc_gc => "🔴",  // JSC GC (high priority)
+            .jsc_ast => "🟠",  // JSC AST (high priority)
+            .wtf => "🟡",  // WTF (medium priority)
+            .bun => "🔵",  // Bun code (actionable)
+            .native => "🟣",  // Native module
+            .unknown => "⚪",  // Unknown
+        };
+
         std.debug.print("═══════════════════════════════════════════════════════\n", .{});
-        std.debug.print("{s} [{d}] {s}\n", .{ icon, i, e.error_type });
+        std.debug.print("{s} {s} [{d}] {s}\n", .{ icon, class_icon, i, e.error_type });
         std.debug.print("═══════════════════════════════════════════════════════\n", .{});
         std.debug.print("  📍 Address: 0x{X}\n", .{e.addr});
         std.debug.print("  💻 PC:      0x{X}\n", .{e.pc});
+        std.debug.print("  🏷️  Class:   {s}\n", .{@tagName(e.classification)});
         if (e.thread.len > 0 and !std.mem.eql(u8, e.thread, "unknown")) {
             std.debug.print("  🧵 Thread:  {s}\n", .{e.thread});
         }
@@ -108,7 +213,7 @@ pub fn main() !void {
 
         if (e.symbolicated) |sym| {
             std.debug.print("  📍 Source Location:\n", .{});
-            
+
             // Truncate long C++ function names
             const max_func_len = 120;
             if (sym.function.len > max_func_len) {
@@ -116,7 +221,7 @@ pub fn main() !void {
             } else {
                 std.debug.print("     {s}\n", .{sym.function});
             }
-            
+
             if (sym.module.len > 0 and !std.mem.eql(u8, sym.module, "???")) {
                 std.debug.print("     in {s} (+0x{X})\n", .{ sym.module, sym.offset });
             }
@@ -144,7 +249,7 @@ pub fn main() !void {
     } else {
         std.debug.print("═══════════════════════════════════════════════════════\n", .{});
         std.debug.print("📊 Summary: {d} unique error(s)\n", .{errors.items.len});
-        
+
         // Group by error type
         var by_type = std.StringHashMap(usize).init(alloc);
         defer by_type.deinit();
@@ -152,11 +257,36 @@ pub fn main() !void {
             const cnt = by_type.get(e.error_type) orelse 0;
             try by_type.put(e.error_type, cnt + 1);
         }
-        
-        std.debug.print("\n📁 By type:\n", .{});
+
+        std.debug.print("\n📁 By error type:\n", .{});
         var it = by_type.iterator();
         while (it.next()) |entry| {
             std.debug.print("   • {s}: {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        }
+
+        // Group by classification
+        var by_class = std.AutoHashMap(ErrorEntry.Classification, usize).init(alloc);
+        defer by_class.deinit();
+        for (errors.items) |e| {
+            const cnt = by_class.get(e.classification) orelse 0;
+            try by_class.put(e.classification, cnt + 1);
+        }
+
+        std.debug.print("\n🏷️  By classification:\n", .{});
+        inline for (std.meta.fields(ErrorEntry.Classification)) |field| {
+            const class = @field(ErrorEntry.Classification, field.name);
+            if (by_class.get(class)) |cnt| {
+                const class_icon = switch (class) {
+                    .system_init => "⚙️",
+                    .jsc_gc => "🔴",
+                    .jsc_ast => "🟠",
+                    .wtf => "🟡",
+                    .bun => "🔵",
+                    .native => "🟣",
+                    .unknown => "⚪",
+                };
+                std.debug.print("   {s} {s}: {d}\n", .{ class_icon, field.name, cnt });
+            }
         }
 
         // Count symbolicated
@@ -165,6 +295,24 @@ pub fn main() !void {
             if (e.symbolicated != null) symbolicated_count += 1;
         }
         std.debug.print("\n🔍 Symbolicated: {d}/{d}\n", .{ symbolicated_count, errors.items.len });
+
+        // Priority recommendations
+        var has_actionable = false;
+        for (errors.items) |e| {
+            if (e.classification == .jsc_gc or e.classification == .jsc_ast or e.classification == .bun) {
+                has_actionable = true;
+                break;
+            }
+        }
+        if (has_actionable) {
+            std.debug.print("\n", .{});
+            std.debug.print("═══════════════════════════════════════════════════════\n", .{});
+            std.debug.print("🎯 Priority Recommendations:\n", .{});
+            std.debug.print("   🔴 JSC GC leaks: Check WebKit upstream for GC race conditions\n", .{});
+            std.debug.print("   🟠 JSC AST leaks: Review for-of loop and destructuring handling\n", .{});
+            std.debug.print("   🔵 Bun code: Directly actionable in Bun codebase\n", .{});
+            std.debug.print("   ⚙️  System init: Likely macOS AArch64 false positives (suppress)\n", .{});
+        }
     }
 
     std.debug.print("\n", .{});
@@ -375,16 +523,32 @@ fn symbolicateErrors(
     for (errors.items) |*e| {
         // For LeakSanitizer, top frames are in ASAN runtime
         // Try to find first frame from the application binary
-        
+
         // If no symbolication from top PC, try stack frames
         if (try symbolicatePC(alloc, e.pc, binary)) |sym| {
             e.symbolicated = sym;
+            e.classification = classifyLeak(sym.function, sym.module);
         } else if (e.stack_frames.items.len > 0) {
             // Try each frame until we find one from the application
             for (e.stack_frames.items) |frame_pc| {
                 if (try symbolicatePC(alloc, frame_pc, binary)) |sym| {
                     e.symbolicated = sym;
+                    e.classification = classifyLeak(sym.function, sym.module);
                     break;
+                }
+            }
+        }
+        
+        // If still unclassified, check stack frames for classification
+        if (e.classification == .unknown and e.stack_frames.items.len > 0) {
+            // Try to classify based on any frame info we have
+            for (e.stack_frames.items) |frame_pc| {
+                if (try symbolicatePC(alloc, frame_pc, binary)) |sym| {
+                    const frame_class = classifyLeak(sym.function, sym.module);
+                    if (frame_class != .system_init and frame_class != .unknown) {
+                        e.classification = frame_class;
+                        break;
+                    }
                 }
             }
         }
