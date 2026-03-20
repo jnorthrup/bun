@@ -15,6 +15,35 @@ using namespace JSC;
 
 extern "C" int getRSS(size_t* rss);
 
+struct FootprintInfo {
+    size_t phys_footprint;
+    size_t internal;
+    size_t compressed;
+    size_t purgeable_volatile;
+    size_t region_count;
+};
+
+extern "C" int getFootprint(FootprintInfo* info);
+
+struct VMRegionEntry {
+    const char* name;
+    size_t size;
+    size_t resident;
+    size_t dirty;
+    size_t swapped;
+    int count;
+};
+
+struct VMRegionSummary {
+    VMRegionEntry entries[32];
+    int entry_count;
+    size_t total_virtual;
+    size_t total_resident;
+    size_t total_dirty;
+};
+
+extern "C" int getVMRegions(VMRegionSummary* summary);
+
 class Process : public WebCore::JSEventEmitter {
     using Base = WebCore::JSEventEmitter;
 

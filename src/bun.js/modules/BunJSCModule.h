@@ -200,7 +200,7 @@ createMemoryFootprintStructure(JSC::VM& vm, JSC::JSGlobalObject* globalObject)
 {
 
     JSC::Structure* structure = globalObject->structureCache().emptyObjectStructureForPrototype(
-        globalObject, globalObject->objectPrototype(), 5);
+        globalObject, globalObject->objectPrototype(), 6);
     JSC::PropertyOffset offset;
 
     structure = structure->addPropertyTransition(
@@ -213,6 +213,8 @@ createMemoryFootprintStructure(JSC::VM& vm, JSC::JSGlobalObject* globalObject)
         vm, structure, Identifier::fromString(vm, "peakCommit"_s), 0, offset);
     structure = structure->addPropertyTransition(
         vm, structure, Identifier::fromString(vm, "pageFaults"_s), 0, offset);
+    structure = structure->addPropertyTransition(
+        vm, structure, Identifier::fromString(vm, "footprint"_s), 0, offset);
 
     return structure;
 }
@@ -388,6 +390,24 @@ JSC_DEFINE_HOST_FUNCTION(functionCreateMemoryFootprint,
     object->putDirectOffset(vm, 2, jsNumber(current_commit));
     object->putDirectOffset(vm, 3, jsNumber(peak_commit));
     object->putDirectOffset(vm, 4, jsNumber(page_faults));
+
+    // Add footprint data: phys_footprint, internal, compressed, purgeable, region_count
+    JSC::JSObject* footprint = JSC::constructEmptyObject(vm);
+    Bun::FootprintInfo fp = {};
+    if (Bun::getFootprint(&fp) == 0) {
+        footprint->putDirect(vm, Identifier::fromString(vm, "physical"_s), jsNumber(fp.phys_footprint));
+        footprint->putDirect(vm, Identifier::fromString(vm, "internal"_s), jsNumber(fp.internal));
+        footprint->putDirect(vm, Identifier::fromString(vm, "compressed"_s), jsNumber(fp.compressed));
+        footprint->putDirect(vm, Identifier::fromString(vm, "purgeable"_s), jsNumber(fp.purgeable_volatile));
+        footprint->putDirect(vm, Identifier::fromString(vm, "regionCount"_s), jsNumber(fp.region_count));
+    } else {
+        footprint->putDirect(vm, Identifier::fromString(vm, "physical"_s), jsNumber(current_rss));
+        footprint->putDirect(vm, Identifier::fromString(vm, "internal"_s), jsNumber(0));
+        footprint->putDirect(vm, Identifier::fromString(vm, "compressed"_s), jsNumber(0));
+        footprint->putDirect(vm, Identifier::fromString(vm, "purgeable"_s), jsNumber(0));
+        footprint->putDirect(vm, Identifier::fromString(vm, "regionCount"_s), jsNumber(0));
+    }
+    object->putDirectOffset(vm, 5, footprint);
 
     return JSValue::encode(object);
 }
@@ -929,6 +949,74 @@ JSC_DEFINE_HOST_FUNCTION(functionPercentAvailableMemoryInUse, (JSGlobalObject * 
 
 #endif
 
+JSC_DECLARE_HOST_FUNCTION(functionVmmap);
+JSC_DEFINE_HOST_FUNCTION(functionVmmap, (JSGlobalObject * globalObject, CallFrame*))
+{
+    VM& vm = globalObject->vm();
+
+    Bun::VMRegionSummary summary = {};
+    if (Bun::getVMRegions(&summary) != 0) {
+        return JSValue::encode(jsNull());
+    }
+
+    // Build the result object:
+    // {
+    //   totalVirtual: number,
+    //   totalResident: number,
+    //   totalDirty: number,
+    //   regions: [{ name, size, resident, dirty, swapped, count }, ...]
+    // }
+
+    JSC::JSObject* result = JSC::constructEmptyObject(vm);
+    result->putDirect(vm, Identifier::fromString(vm, "totalVirtual"_s), jsNumber(summary.total_virtual));
+    result->putDirect(vm, Identifier::fromString(vm, "totalResident"_s), jsNumber(summary.total_resident));
+    result->putDirect(vm, Identifier::fromString(vm, "totalDirty"_s), jsNumber(summary.total_dirty));
+
+    // Sort entries by size descending
+    // (use a simple copy + sort since entry_count is small)
+    struct SortedEntry {
+        int original_index;
+        size_t size;
+    };
+    SortedEntry sorted[32];
+    for (int i = 0; i < summary.entry_count; i++) {
+        sorted[i].original_index = i;
+        sorted[i].size = summary.entries[i].size;
+    }
+    // Simple insertion sort (32 elements max)
+    for (int i = 1; i < summary.entry_count; i++) {
+        SortedEntry key = sorted[i];
+        int j = i - 1;
+        while (j >= 0 && sorted[j].size < key.size) {
+            sorted[j + 1] = sorted[j];
+            j--;
+        }
+        sorted[j + 1] = key;
+    }
+
+    JSC::JSArray* regions = JSC::constructEmptyArray(globalObject, nullptr, summary.entry_count);
+
+    for (int i = 0; i < summary.entry_count; i++) {
+        const Bun::VMRegionEntry* entry = &summary.entries[sorted[i].original_index];
+        JSC::JSObject* regionObj = JSC::constructEmptyObject(vm);
+        regionObj->putDirect(vm, Identifier::fromString(vm, "name"_s), jsString(vm, String::fromUTF8(entry->name)));
+        regionObj->putDirect(vm, Identifier::fromString(vm, "size"_s), jsNumber(entry->size));
+        regionObj->putDirect(vm, Identifier::fromString(vm, "resident"_s), jsNumber(entry->resident));
+        regionObj->putDirect(vm, Identifier::fromString(vm, "dirty"_s), jsNumber(entry->dirty));
+#if defined(__APPLE__)
+        regionObj->putDirect(vm, Identifier::fromString(vm, "swapped"_s), jsNumber(entry->swapped));
+#else
+        regionObj->putDirect(vm, Identifier::fromString(vm, "swapped"_s), jsNumber(0));
+#endif
+        regionObj->putDirect(vm, Identifier::fromString(vm, "count"_s), jsNumber(entry->count));
+        regions->putDirectIndex(globalObject, i, regionObj);
+    }
+
+    result->putDirect(vm, Identifier::fromString(vm, "regions"_s), regions);
+
+    return JSValue::encode(result);
+}
+
 // clang-format off
 /* Source for BunJSCModuleTable.lut.h
 @begin BunJSCModuleTable
@@ -964,13 +1052,14 @@ JSC_DEFINE_HOST_FUNCTION(functionPercentAvailableMemoryInUse, (JSGlobalObject * 
     deserialize                         functionDeserialize                         Function    0
     estimateShallowMemoryUsageOf        functionEstimateDirectMemoryUsageOf         Function    1
     percentAvailableMemoryInUse         functionPercentAvailableMemoryInUse         Function    0
+    vmmap                               functionVmmap                               Function    0
 @end
 */
 
 namespace Zig {
 DEFINE_NATIVE_MODULE(BunJSC)
 {
-    INIT_NATIVE_MODULE(36);
+    INIT_NATIVE_MODULE(37);
 
     putNativeFn(Identifier::fromString(vm, "callerSourceOrigin"_s), functionCallerSourceOrigin);
     putNativeFn(Identifier::fromString(vm, "jscDescribe"_s), functionDescribe);
@@ -1005,6 +1094,7 @@ DEFINE_NATIVE_MODULE(BunJSC)
     putNativeFn(Identifier::fromString(vm, "deserialize"_s), functionDeserialize);
     putNativeFn(Identifier::fromString(vm, "estimateShallowMemoryUsageOf"_s), functionEstimateDirectMemoryUsageOf);
     putNativeFn(Identifier::fromString(vm, "percentAvailableMemoryInUse"_s), functionPercentAvailableMemoryInUse);
+    putNativeFn(Identifier::fromString(vm, "vmmap"_s), functionVmmap);
 
     // Deprecated
     putNativeFn(Identifier::fromString(vm, "describe"_s), functionDescribe);

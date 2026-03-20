@@ -3290,6 +3290,377 @@ err:
 #endif
 }
 
+// Footprint info: the real memory cost including compressed, purgeable, etc.
+// On macOS this uses TASK_VM_INFO which gives physical_footprint (what `footprint` CLI shows).
+// On Linux this reads /proc/self/smaps_rollup.
+
+extern "C" int getFootprint(FootprintInfo* info)
+{
+#if defined(__APPLE__)
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    task_vm_info_data_t vm_info;
+    kern_return_t err = task_info(mach_task_self(),
+        TASK_VM_INFO,
+        reinterpret_cast<task_info_t>(&vm_info),
+        &count);
+
+    if (err != KERN_SUCCESS)
+        return -1;
+
+    info->phys_footprint = (size_t)vm_info.phys_footprint;
+    info->internal = (size_t)vm_info.internal;
+    info->compressed = (size_t)vm_info.compressor;
+    info->purgeable_volatile = (size_t)vm_info.purgeable_volatile_purgeable;
+    info->region_count = (size_t)vm_info.region_count;
+    return 0;
+#elif defined(__linux__)
+    // Read /proc/self/smaps_rollup for a single aggregated view
+    int fd;
+    do
+        fd = open("/proc/self/smaps_rollup", O_RDONLY);
+    while (fd == -1 && errno == EINTR);
+
+    if (fd == -1) {
+        // smaps_rollup not available (older kernels), fall back to defaults
+        size_t rss = 0;
+        if (getRSS(&rss) == 0) {
+            info->phys_footprint = rss;
+            info->internal = rss;
+        }
+        info->compressed = 0;
+        info->purgeable_volatile = 0;
+        info->region_count = 0;
+        return 0;
+    }
+
+    char buf[4096];
+    ssize_t n;
+    do
+        n = read(fd, buf, sizeof(buf) - 1);
+    while (n == -1 && errno == EINTR);
+
+    int closeErrno = 0;
+    do {
+        closeErrno = close(fd);
+    } while (closeErrno == -1 && errno == EINTR);
+
+    if (n <= 0) {
+        info->phys_footprint = 0;
+        info->internal = 0;
+        info->compressed = 0;
+        info->purgeable_volatile = 0;
+        info->region_count = 0;
+        return 0;
+    }
+    buf[n] = '\0';
+
+    // Parse smaps_rollup fields:
+    // Rss: NNN kB
+    // Pss: NNN kB  <-- this is the proportional set size (closest to macOS phys_footprint)
+    // Anonymous: NNN kB
+    // Swap: NNN kB
+    size_t pss = 0, anon = 0, swap = 0, rss_val = 0;
+    const char* line = buf;
+    while (line && *line) {
+        const char* next = strchr(line, '\n');
+        size_t len = next ? (size_t)(next - line) : strlen(line);
+
+        unsigned long val = 0;
+        if (len > 4 && strncmp(line, "Rss:", 4) == 0) {
+            val = strtoul(line + 4, NULL, 10);
+            rss_val = val * 1024;
+        } else if (len > 4 && strncmp(line, "Pss:", 4) == 0) {
+            val = strtoul(line + 4, NULL, 10);
+            pss = val * 1024;
+        } else if (len > 9 && strncmp(line, "Anonymous:", 10) == 0) {
+            val = strtoul(line + 10, NULL, 10);
+            anon = val * 1024;
+        } else if (len > 5 && strncmp(line, "Swap:", 5) == 0) {
+            val = strtoul(line + 5, NULL, 10);
+            swap = val * 1024;
+        }
+
+        line = next ? next + 1 : NULL;
+    }
+
+    info->phys_footprint = pss;
+    info->internal = anon;
+    info->compressed = swap;
+    info->purgeable_volatile = 0;
+    info->region_count = 0;
+    return 0;
+#elif OS(WINDOWS)
+    // Windows: just report RSS as footprint
+    size_t rss = 0;
+    if (uv_resident_set_memory(&rss) == 0) {
+        info->phys_footprint = rss;
+        info->internal = rss;
+        info->compressed = 0;
+        info->purgeable_volatile = 0;
+        info->region_count = 0;
+        return 0;
+    }
+    return -1;
+#else
+#error "Unknown platform"
+#endif
+}
+
+// VM region breakdown: walks VM regions and groups by tag/name.
+// On macOS this uses mach_vm_region_recurse to identify IOAccelerator, bmalloc, JIT regions.
+// On Linux this parses /proc/self/smaps.
+
+#if defined(__APPLE__)
+// Map VM tag ID to human-readable name
+static const char* vmTagName(int tag)
+{
+    switch (tag) {
+    case 1: return "Mach";
+    case 2: return "VM_ALLOCATE";
+    case 3: return "CTF";
+    case 4: return "IOKIT";
+    case 5: return "Stack";
+    case 6: return "Guard";
+    case 7: return "Shared_PMAP";
+    case 10: return "IOAccelerator";
+    case 13: return "AppKit";
+    case 14: return "Foundation";
+    case 15: return "CoreGraphics";
+    case 16: return "CoreServices";
+    case 20: return "KernelAllocOnce";
+    case 24: return "ATS";
+    case 25: return "ColorSync";
+    case 27: return "ImageIO";
+    case 28: return "CG_raster_data";
+    case 29: return "CG_image";
+    case 30: return "dylib";
+    case 31: return "ObjC dispatchers";
+    case 33: return "SQLite";
+    case 34: return "JavaScriptCore";
+    case 35: return "JavaScriptCore JIT";
+    case 38: return "Rosetta";
+    case 40: return "AppClip";
+    case 44: return "WebKit Malloc";
+    case 45: return "WebKit bmalloc";
+    case 46: return "WebKit Gigacage";
+    case 47: return "WebKit JIT";
+    case 50: return "KernelAllocOnce";
+    case 51: return "MemoryTag";
+    case 56: return "System";
+    case 60: return "Unshared_PMAP";
+    case 64: return "SkyLight";
+    case 65: return "Accelerate";
+    case 66: return "CoreML";
+    case 67: return "Metal";
+    case 200: return "Unused_SharedPagePools";
+    case 201: return "Unused_SuspendedMemory";
+    case 202: return "Unused_PurgeableVol";
+    case 203: return "Unused_Emergency";
+    case 204: return "Unused_StackTrace";
+    case 205: return "Unused_Atom";
+    default: return NULL;
+    }
+}
+#endif
+
+extern "C" int getVMRegions(VMRegionSummary* summary)
+{
+    summary->entry_count = 0;
+    summary->total_virtual = 0;
+    summary->total_resident = 0;
+    summary->total_dirty = 0;
+
+    // Initialize entry lookup by name
+    auto findOrCreateEntry = [&](const char* name) -> VMRegionEntry* {
+        for (int i = 0; i < summary->entry_count; i++) {
+            if (summary->entries[i].name == name || (name && summary->entries[i].name && strcmp(summary->entries[i].name, name) == 0))
+                return &summary->entries[i];
+        }
+        if (summary->entry_count >= 32)
+            return NULL;
+        VMRegionEntry* e = &summary->entries[summary->entry_count++];
+        e->name = name;
+        e->size = 0;
+        e->resident = 0;
+        e->dirty = 0;
+        e->swapped = 0;
+        e->count = 0;
+        return e;
+    };
+
+#if defined(__APPLE__)
+    mach_vm_address_t address = 0;
+    mach_vm_size_t size = 0;
+    natural_t depth = 0;
+    vm_region_submap_info_data_64_t info;
+    mach_msg_type_number_t count;
+
+    while (true) {
+        count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        kern_return_t kr = mach_vm_region_recurse(mach_task_self(), &address, &size,
+            &depth, (vm_region_recurse_info_t)&info, &count);
+
+        if (kr != KERN_SUCCESS)
+            break;
+
+        if (info.is_submap) {
+            depth++;
+            continue;
+        }
+
+        const char* name = vmTagName(info.user_tag);
+        if (name == NULL) {
+            // Try to get the mach message name from the object
+            static char unknown_buf[32];
+            snprintf(unknown_buf, sizeof(unknown_buf), "tag_%d", info.user_tag);
+            name = unknown_buf;
+        }
+
+        VMRegionEntry* entry = findOrCreateEntry(name);
+        if (entry) {
+            entry->size += size;
+            entry->resident += (size_t)info.pages_resolved * vm_page_size;
+            entry->dirty += (size_t)info.pages_dirtied * vm_page_size;
+            entry->swapped += (size_t)info.pages_swapped_out * vm_page_size;
+            entry->count++;
+        }
+
+        summary->total_virtual += size;
+        summary->total_resident += (size_t)info.pages_resolved * vm_page_size;
+        summary->total_dirty += (size_t)info.pages_dirtied * vm_page_size;
+
+        address += size;
+        depth = 0;
+    }
+
+    return 0;
+#elif defined(__linux__)
+    // Parse /proc/self/smaps for per-region breakdown
+    int fd;
+    do
+        fd = open("/proc/self/smaps", O_RDONLY);
+    while (fd == -1 && errno == EINTR);
+
+    if (fd == -1)
+        return -1;
+
+    // Read smaps file (can be large)
+    size_t buf_cap = 1024 * 1024; // 1MB should be enough
+    char* buf = (char*)malloc(buf_cap);
+    if (!buf) {
+        close(fd);
+        return -1;
+    }
+
+    size_t total_read = 0;
+    while (total_read < buf_cap) {
+        ssize_t n = read(fd, buf + total_read, buf_cap - total_read);
+        if (n <= 0) break;
+        total_read += (size_t)n;
+    }
+    close(fd);
+
+    if (total_read == 0) {
+        free(buf);
+        return -1;
+    }
+    buf[total_read] = '\0';
+
+    // Walk lines: regions start with address ranges like "00400000-0040b000"
+    // followed by metadata lines like "Size:", "Rss:", "Pss:", "Shared_Clean:", etc.
+    // Library/path names appear on lines starting with "/"
+    const char* line = buf;
+    size_t current_size = 0, current_rss = 0, current_pss = 0;
+    const char* current_name = "[anon]";
+
+    while (line && *line) {
+        const char* next = strchr(line, '\n');
+        size_t len = next ? (size_t)(next - line) : strlen(line);
+
+        // Check if this is a memory region header line (starts with hex address)
+        if (len > 10 && line[0] >= '0' && line[0] <= '9') {
+            // Save previous region if we had one
+            if (current_rss > 0) {
+                VMRegionEntry* entry = findOrCreateEntry(current_name);
+                if (entry) {
+                    entry->size += current_size;
+                    entry->resident += current_rss;
+                    entry->dirty += current_pss; // PSS as proxy for dirty
+                    entry->count++;
+                }
+                summary->total_virtual += current_size;
+                summary->total_resident += current_rss;
+                summary->total_dirty += current_pss;
+            }
+            current_size = 0;
+            current_rss = 0;
+            current_pss = 0;
+
+            // Extract permissions and name from this line
+            // Format: "address perms offset dev inode pathname"
+            const char* pathname = NULL;
+            int space_count = 0;
+            for (size_t i = 0; i < len; i++) {
+                if (line[i] == ' ') {
+                    space_count++;
+                    if (space_count == 5) {
+                        pathname = line + i + 1;
+                        // Skip leading spaces
+                        while (*pathname == ' ') pathname++;
+                        if (pathname >= line + len) pathname = NULL;
+                        break;
+                    }
+                }
+            }
+
+            if (pathname && *pathname && *pathname != '[') {
+                current_name = pathname;
+            } else {
+                // Check for special names
+                if (pathname && strstr(pathname, "[heap]")) current_name = "[heap]";
+                else if (pathname && strstr(pathname, "[stack")) current_name = "[stack]";
+                else if (pathname && strstr(pathname, "[vdso]")) current_name = "[vdso]";
+                else current_name = "[anon]";
+            }
+        }
+        // Parse size/rss/pss fields
+        else if (len > 5 && strncmp(line, "Size:", 5) == 0) {
+            unsigned long val = strtoul(line + 5, NULL, 10);
+            current_size = val * 1024;
+        } else if (len > 4 && strncmp(line, "Rss:", 4) == 0) {
+            unsigned long val = strtoul(line + 4, NULL, 10);
+            current_rss = val * 1024;
+        } else if (len > 4 && strncmp(line, "Pss:", 4) == 0) {
+            unsigned long val = strtoul(line + 4, NULL, 10);
+            current_pss = val * 1024;
+        }
+
+        line = next ? next + 1 : NULL;
+    }
+
+    // Don't forget the last region
+    if (current_rss > 0) {
+        VMRegionEntry* entry = findOrCreateEntry(current_name);
+        if (entry) {
+            entry->size += current_size;
+            entry->resident += current_rss;
+            entry->dirty += current_pss;
+            entry->count++;
+        }
+        summary->total_virtual += current_size;
+        summary->total_resident += current_rss;
+        summary->total_dirty += current_pss;
+    }
+
+    free(buf);
+    return 0;
+#elif OS(WINDOWS)
+    return -1; // Not implemented on Windows yet
+#else
+#error "Unknown platform"
+#endif
+}
+
 JSC_DEFINE_HOST_FUNCTION(Process_functionMemoryUsage, (JSC::JSGlobalObject * globalObject, JSC::CallFrame* callFrame))
 {
     auto& vm = JSC::getVM(globalObject);
