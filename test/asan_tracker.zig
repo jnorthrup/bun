@@ -114,10 +114,38 @@ fn classifyLeak(function: []const u8, module: []const u8) ErrorEntry.Classificat
     return .unknown;
 }
 
+const Config = struct {
+    /// Suppress system initialization leaks (macOS AArch64 false positives)
+    suppress_system_leaks: bool = false,
+    /// Output JSON format for CI integration
+    json_output: bool = false,
+    /// Only show leaks matching these classifications
+    filter_class: ?[]const u8 = null,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
+
+    // Parse command-line arguments
+    var config = Config{};
+    var args = try std.process.argsWithAllocator(alloc);
+    defer args.deinit();
+    _ = args.skip(); // skip program name
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--suppress-system-leaks") or std.mem.eql(u8, arg, "-s")) {
+            config.suppress_system_leaks = true;
+        } else if (std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "-j")) {
+            config.json_output = true;
+        } else if (std.mem.startsWith(u8, arg, "--filter=")) {
+            config.filter_class = arg["--filter=".len..];
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printHelp();
+            return;
+        }
+    }
 
     var seen = std.AutoHashMap(usize, void).init(alloc);
     defer seen.deinit();
@@ -166,35 +194,77 @@ pub fn main() !void {
         }
     }
 
-    std.debug.print("\n", .{});
-    std.debug.print("╔═══════════════════════════════════════════════════════╗\n", .{});
-    std.debug.print("║           🩺 ASAN Error Tracker                       ║\n", .{});
-    std.debug.print("╚═══════════════════════════════════════════════════════╝\n", .{});
-    std.debug.print("\n", .{});
-    std.debug.print("📁 Files scanned:  {d}\n", .{file_count});
-    std.debug.print("🔍 Unique errors:  {d}\n\n", .{errors.items.len});
+    // Apply filters
+    var filtered_errors = std.ArrayList(ErrorEntry){};
+    defer filtered_errors.deinit(alloc);
+    
+    for (errors.items) |e| {
+        // Filter by classification
+        if (config.filter_class) |filter| {
+            const filter_class = std.meta.stringToEnum(ErrorEntry.Classification, filter) orelse {
+                std.debug.print("Unknown classification: {s}\n", .{filter});
+                std.debug.print("Valid classes: system_init, jsc_gc, jsc_ast, wtf, bun, native, unknown\n", .{});
+                return;
+            };
+            if (e.classification != filter_class) continue;
+        }
+        
+        // Filter system init leaks if requested
+        if (config.suppress_system_leaks and e.classification == .system_init) continue;
+        
+        try filtered_errors.append(alloc, e);
+    }
 
-    if (errors.items.len > 0) {
-        if (bun_binary) |binary| {
-            std.debug.print("🔨 Symbolicating with: {s}\n\n", .{binary});
-            try symbolicateErrors(alloc, &errors, binary);
-            alloc.free(binary);
-        } else {
-            std.debug.print("⚠️  No bun-debug binary found. Run without symbolication.\n\n", .{});
+    // Print header
+    if (!config.json_output) {
+        std.debug.print("\n", .{});
+        std.debug.print("╔═══════════════════════════════════════════════════════╗\n", .{});
+        std.debug.print("║           🩺 ASAN Error Tracker                       ║\n", .{});
+        std.debug.print("╚═══════════════════════════════════════════════════════╝\n", .{});
+        std.debug.print("\n", .{});
+        std.debug.print("📁 Files scanned:   {d}\n", .{file_count});
+        std.debug.print("🔍 Total errors:    {d}\n", .{errors.items.len});
+        std.debug.print("🔍 After filtering: {d}\n\n", .{filtered_errors.items.len});
+        
+        if (config.suppress_system_leaks) {
+            std.debug.print("⚙️  System leaks suppressed\n", .{});
+        }
+        if (config.filter_class) |filter| {
+            std.debug.print("🔍 Filtered by: {s}\n\n", .{filter});
+        }
+
+        if (filtered_errors.items.len > 0) {
+            if (bun_binary) |binary| {
+                std.debug.print("🔨 Symbolicating with: {s}\n\n", .{binary});
+                try symbolicateErrors(alloc, &filtered_errors, binary);
+                alloc.free(binary);
+            } else {
+                std.debug.print("⚠️  No bun-debug binary found. Run without symbolication.\n\n", .{});
+            }
         }
     }
 
+    // Print detailed report (or JSON)
+    if (config.json_output) {
+        try printJsonReport(alloc, &filtered_errors, file_count);
+    } else {
+        try printDetailedReport(alloc, &filtered_errors, errors.items.len);
+    }
+}
+
+fn printDetailedReport(alloc: std.mem.Allocator, errors: *const std.ArrayList(ErrorEntry), _total_count: usize) !void {
+    _ = _total_count;
     // Print detailed report
     for (errors.items, 0..) |e, i| {
         const icon = if (std.mem.startsWith(u8, e.error_type, "detected")) "💧" else "💥";
         const class_icon = switch (e.classification) {
-            .system_init => "⚙️",  // System init (likely false positive)
-            .jsc_gc => "🔴",  // JSC GC (high priority)
-            .jsc_ast => "🟠",  // JSC AST (high priority)
-            .wtf => "🟡",  // WTF (medium priority)
-            .bun => "🔵",  // Bun code (actionable)
-            .native => "🟣",  // Native module
-            .unknown => "⚪",  // Unknown
+            .system_init => "⚙️",
+            .jsc_gc => "🔴",
+            .jsc_ast => "🟠",
+            .wtf => "🟡",
+            .bun => "🔵",
+            .native => "🟣",
+            .unknown => "⚪",
         };
 
         std.debug.print("═══════════════════════════════════════════════════════\n", .{});
@@ -226,7 +296,7 @@ pub fn main() !void {
                 std.debug.print("     in {s} (+0x{X})\n", .{ sym.module, sym.offset });
             }
             std.debug.print("\n", .{});
-        } else if (bun_binary != null) {
+        } else {
             std.debug.print("  ⚠️  Could not resolve source location\n\n", .{});
         }
 
@@ -330,6 +400,39 @@ pub fn main() !void {
             alloc.free(sym.function);
         }
     }
+}
+
+fn printJsonReport(_alloc: std.mem.Allocator, errors: *const std.ArrayList(ErrorEntry), file_count: usize) !void {
+    _ = _alloc;
+    std.debug.print("{{\n", .{});
+    std.debug.print("  \"files_scanned\": {d},\n", .{file_count});
+    std.debug.print("  \"total_errors\": {d},\n", .{errors.items.len});
+    std.debug.print("  \"errors\": [\n", .{});
+    
+    for (errors.items, 0..) |e, i| {
+        std.debug.print("    {{\n", .{});
+        std.debug.print("      \"index\": {d},\n", .{i});
+        std.debug.print("      \"type\": \"{s}\",\n", .{e.error_type});
+        std.debug.print("      \"classification\": \"{s}\",\n", .{@tagName(e.classification)});
+        std.debug.print("      \"address\": \"0x{X}\",\n", .{e.addr});
+        std.debug.print("      \"pc\": \"0x{X}\"", .{e.pc});
+        if (e.symbolicated) |sym| {
+            std.debug.print(",\n", .{});
+            std.debug.print("      \"function\": \"{s}\",\n", .{sym.function});
+            std.debug.print("      \"module\": \"{s}\",\n", .{sym.module});
+            std.debug.print("      \"offset\": \"0x{X}\"\n", .{sym.offset});
+        } else {
+            std.debug.print("\n", .{});
+        }
+        if (i < errors.items.len - 1) {
+            std.debug.print("    }},\n", .{});
+        } else {
+            std.debug.print("    }}\n", .{});
+        }
+    }
+    
+    std.debug.print("  ]\n", .{});
+    std.debug.print("}}\n", .{});
 }
 
 fn findBunDebugBinary(alloc: std.mem.Allocator) ?[]const u8 {
@@ -620,4 +723,37 @@ fn symbolicatePC(
     }
 
     return null;
+}
+
+fn printHelp() void {
+    std.debug.print(
+        \\🩺 ASAN Error Tracker - Analyze AddressSanitizer and LeakSanitizer logs
+        \\
+        \\Usage: ./vendor/zig/zig run test/asan_tracker.zig [OPTIONS]
+        \\
+        \\Options:
+        \\  -s, --suppress-system-leaks   Hide system initialization leaks (macOS AArch64 false positives)
+        \\  -j, --json                    Output JSON format for CI integration
+        \\  --filter=<class>              Only show leaks matching classification
+        \\                                Classes: system_init, jsc_gc, jsc_ast, wtf, bun, native, unknown
+        \\  -h, --help                    Show this help message
+        \\
+        \\Examples:
+        \\  # Basic usage
+        \\  ./vendor/zig/zig run test/asan_tracker.zig
+        \\
+        \\  # Suppress system false positives
+        \\  ./vendor/zig/zig run test/asan_tracker.zig --suppress-system-leaks
+        \\
+        \\  # Show only JSC GC leaks
+        \\  ./vendor/zig/zig run test/asan_tracker.zig --filter=jsc_gc
+        \\
+        \\  # Export JSON for CI
+        \\  ./vendor/zig/zig run test/asan_tracker.zig --json > asan-report.json
+        \\
+        \\End-to-end workflow:
+        \\  1. ASAN_OPTIONS="log_path=asan" ./build/debug/bun-debug test ...
+        \\  2. ./vendor/zig/zig run test/asan_tracker.zig
+        \\
+    , .{});
 }
